@@ -565,11 +565,48 @@ def adaptive_chunk(items, chunk_size=50, overlap=1):
     
     return ranges, chunks
 
-def main(input_label, ocr_res, output_dir):
+
+def safe_doc_stem(input_label):
+    base = os.path.basename(str(input_label))
+    stem, ext = os.path.splitext(base)
+    return stem if ext else base
+
+
+def write_raw_record(raw_doc_dir, task, chunk_index, rng, pages, prompt, raw_response, parsed=None, extra=None):
+    if not raw_doc_dir:
+        return
+    os.makedirs(raw_doc_dir, exist_ok=True)
+    payload = {
+        "task": task,
+        "chunk_index": chunk_index,
+        "range": rng,
+        "pages": pages,
+        "prompt": prompt,
+        "raw_response": raw_response,
+        "parsed": parsed if parsed is not None else [],
+    }
+    if extra:
+        payload.update(extra)
+    output_path = os.path.join(raw_doc_dir, f"{task}_chunk_{chunk_index:04d}.json")
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=4)
+
+
+def write_raw_summary(raw_doc_dir, payload):
+    if not raw_doc_dir:
+        return
+    os.makedirs(raw_doc_dir, exist_ok=True)
+    with open(os.path.join(raw_doc_dir, "summary.json"), "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=4)
+
+
+def main(input_label, ocr_res, output_dir, raw_output_dir=None):
     """
     Post-Processing the OCR result of each document
     """
-    print(os.path.join(output_dir, f"{os.path.basename(input_label)[:-4]}.json"))
+    doc_stem = safe_doc_stem(input_label)
+    raw_doc_dir = os.path.join(raw_output_dir, doc_stem) if raw_output_dir else None
+    print(os.path.join(output_dir, f"{doc_stem}.json"))
     item = ocr_res
     doc_blocks = []
     doc_pages = []
@@ -598,7 +635,7 @@ def main(input_label, ocr_res, output_dir):
     ranges, chunks = adaptive_chunk(parse_string_notype(contd))
     results = []
 
-    async def process_chunk_contd(rng, chunk, input_label, results):
+    async def process_chunk_contd(chunk_index, rng, chunk, input_label, results):
         pages = list(set([block['page'] for block in chunk]))
         pages = sorted([page for page in pages if rng[0] <= page <= rng[1]])
         base64_image = concatenate_pdf_pages_with_border(input_label, pages)
@@ -608,15 +645,17 @@ def main(input_label, ocr_res, output_dir):
         text = '\n'.join(texts)
         text = '<image>\nTruncation Detection: ' + text
 
-        id_pairs = extract_label1(popo_generate(text, base64_image).replace('<|from|>','<|src_id|>').replace('<|to|>','<|tgt_id|>'))
+        raw_response = popo_generate(text, base64_image)
+        id_pairs = extract_label1(raw_response.replace('<|from|>','<|src_id|>').replace('<|to|>','<|tgt_id|>'))
+        write_raw_record(raw_doc_dir, "contd", chunk_index, rng, pages, text, raw_response, id_pairs)
         for pair in id_pairs:
             if pair not in results:
                 results.append(pair)
     
     async def process_contd(ranges, chunks, input_label, results):
         tasks = [
-            process_chunk_contd(rng, chunk, input_label, results)
-            for rng, chunk in zip(ranges, chunks)
+            process_chunk_contd(index, rng, chunk, input_label, results)
+            for index, (rng, chunk) in enumerate(zip(ranges, chunks))
         ]
         result = await asyncio.gather(*tasks)
     asyncio.run(process_contd(ranges, chunks, input_label, results))
@@ -632,7 +671,7 @@ def main(input_label, ocr_res, output_dir):
     order_res = {}
     results = []
 
-    async def process_chunk_title(rng, chunk, input_label, order_res):
+    async def process_chunk_title(chunk_index, rng, chunk, input_label, order_res):
         pages = list(set([block['page'] for block in chunk]))
         pages = sorted([page for page in pages if rng[0] <= page <= rng[1]])
         base64_image = concatenate_pdf_pages_with_border(input_label, pages)
@@ -642,13 +681,15 @@ def main(input_label, ocr_res, output_dir):
         text = '\n'.join(texts)
         text = '<image>\nTitle Level Analysis: ' + text
         
-        id_pairs = extract_label2(popo_generate(text, base64_image))
+        raw_response = popo_generate(text, base64_image)
+        id_pairs = extract_label2(raw_response)
+        write_raw_record(raw_doc_dir, "title", chunk_index, rng, pages, text, raw_response, id_pairs)
         order_res[rng[0]+rng[1]] = id_pairs
     
     async def process_title(ranges, chunks, input_label, order_res):
         tasks = [
-            process_chunk_title(rng, chunk, input_label, order_res)
-            for rng, chunk in zip(ranges, chunks)
+            process_chunk_title(index, rng, chunk, input_label, order_res)
+            for index, (rng, chunk) in enumerate(zip(ranges, chunks))
         ]
         result = await asyncio.gather(*tasks)
     asyncio.run(process_title(ranges, chunks, input_label, order_res))
@@ -692,7 +733,7 @@ def main(input_label, ocr_res, output_dir):
     # Association Analysis with Dynamic Chunking
     ranges, chunks = adaptive_chunk(parse_string_type(image))
     results = []
-    async def process_chunk_image(rng, chunk, input_label, results):
+    async def process_chunk_image(chunk_index, rng, chunk, input_label, results):
         pages = list(set([block['page'] for block in chunk]))
         pages = sorted([page for page in pages if rng[0] <= page <= rng[1]])
         base64_image = concatenate_pdf_pages_with_border(input_label, pages)
@@ -702,15 +743,17 @@ def main(input_label, ocr_res, output_dir):
         text = '\n'.join(texts)
         text = '<image>\nImage-Text Correlation Analysis: ' + text
         
-        id_pairs = extract_label1(popo_generate(text, base64_image))
+        raw_response = popo_generate(text, base64_image)
+        id_pairs = extract_label1(raw_response)
+        write_raw_record(raw_doc_dir, "image", chunk_index, rng, pages, text, raw_response, id_pairs)
         for pair in id_pairs:
             if pair not in results:
                 results.append(pair)
 
     async def process_image(ranges, chunks, input_label, results):
         tasks = [
-            process_chunk_image(rng, chunk, input_label, results)
-            for rng, chunk in zip(ranges, chunks)
+            process_chunk_image(index, rng, chunk, input_label, results)
+            for index, (rng, chunk) in enumerate(zip(ranges, chunks))
         ]
         result = await asyncio.gather(*tasks)
     asyncio.run(process_image(ranges, chunks, input_label, results))
@@ -751,11 +794,22 @@ def main(input_label, ocr_res, output_dir):
         if block["type"] == "table":
             block["table_merge"] = -1
 
-    async def process_table_merge_pair(mi):
+    async def process_table_merge_pair(chunk_index, mi):
         prompt = add_table_merge(mi["upper_row_ss"], mi["lower_row_ss"])
         try:
             raw_output = popo_generate(prompt, None)
             cell_list = extract_last_coordinates(raw_output)
+            write_raw_record(
+                raw_doc_dir,
+                "table_merge",
+                chunk_index,
+                None,
+                [],
+                prompt,
+                raw_output,
+                cell_list,
+                extra={"table1_idx": mi["table1_idx"], "table2_idx": mi["table2_idx"]},
+            )
             if cell_list and isinstance(cell_list, list) and len(cell_list) > 0:
                 doc_blocks[mi["table1_idx"]]["table_merge"] = doc_blocks[mi["table2_idx"]]["id"]
                 doc_blocks[mi["table2_idx"]]["table_merge"] = doc_blocks[mi["table1_idx"]]["id"]
@@ -767,11 +821,26 @@ def main(input_label, ocr_res, output_dir):
     merge_inputs = filter_table_merge(doc_blocks)
     if merge_inputs:
         async def process_all_merges():
-            tasks = [process_table_merge_pair(mi) for mi in merge_inputs]
+            tasks = [process_table_merge_pair(index, mi) for index, mi in enumerate(merge_inputs)]
             await asyncio.gather(*tasks)
         asyncio.run(process_all_merges())
 
-    with open(os.path.join(output_dir, f"{os.path.basename(input_label)[:-4]}.json"), 'w', encoding='utf-8') as f:
+    write_raw_summary(
+        raw_doc_dir,
+        {
+            "input_label": input_label,
+            "output_json": os.path.join(output_dir, f"{doc_stem}.json"),
+            "contd_output": contd_output,
+            "title_output": title_output,
+            "image_output": image_output,
+            "contd_label": contd_label,
+            "title_label": title_label,
+            "image_label": image_label,
+            "table_merge_candidates": merge_inputs,
+        },
+    )
+
+    with open(os.path.join(output_dir, f"{doc_stem}.json"), 'w', encoding='utf-8') as f:
         json.dump(doc_blocks, f, ensure_ascii=False, indent=4)
 
 if __name__ == "__main__":

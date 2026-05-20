@@ -1,5 +1,6 @@
 import os
 import json
+import argparse
 from table_merge_utils import merge_cross_page_tables
 
 
@@ -188,11 +189,24 @@ def construct_json_tree(input_file, output_dir, txt_dir):
         for line in output_lines:
             f.write(line + '\n')
     
-input_dir = '' # The inference output dir
-tree_dir = '' # Store the complete tree
-txt_dir = '' # Show the tree overview
-os.makedirs(tree_dir, exist_ok=True)
-os.makedirs(txt_dir, exist_ok=True)
-for file in os.listdir(input_dir):
-    input_file = os.path.join(input_dir, file)
-    construct_json_tree(input_file, tree_dir, txt_dir)
+def parse_args():
+    parser = argparse.ArgumentParser(description="Build JSON trees from post-processing inference outputs.")
+    parser.add_argument("--input-dir", required=True, help="Directory containing inference output JSON files.")
+    parser.add_argument("--output-dir", required=True, help="Directory used to store complete JSON trees.")
+    parser.add_argument("--txt-dir", required=True, help="Directory used to store text tree previews.")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(args.txt_dir, exist_ok=True)
+    for file in sorted(os.listdir(args.input_dir)):
+        if not file.endswith(".json"):
+            continue
+        input_file = os.path.join(args.input_dir, file)
+        construct_json_tree(input_file, args.output_dir, args.txt_dir)
+
+
+if __name__ == "__main__":
+    main()
