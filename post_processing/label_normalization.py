@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass, field
-from difflib import SequenceMatcher
 import json
 from pathlib import Path
 import re
@@ -30,9 +29,17 @@ DEFAULT_PDF_DIR_CANDIDATES = [
 ]
 
 CANONICAL_TYPES = {"title", "text", "image", "table", "caption"}
-DOC_ID_RE = re.compile(r"(doc-[A-Za-z0-9\-]+)")
-HEADING_RE = re.compile(r"^(#{1,8})\s+(.*\S)\s*$")
 SKIP_TYPE = "__skip__"
+SUPPLEMENT_LABEL_MAP = {
+    "page_title": "page_title",
+    "page_number": "page_number",
+    "page_footnote": "page_footnote",
+    "header": "header",
+    "aside_text": "aside_text",
+    "footer": "footer",
+    "number": "page_number",
+    "footnote": "page_footnote",
+}
 
 
 @dataclass
@@ -131,33 +138,15 @@ def normalize_text(text: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def compact_text(text: Any) -> str:
-    text = normalize_text(text)
-    return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", text).lower()
-
-
-def text_similarity(left: Any, right: Any) -> float:
-    left_text = compact_text(left)
-    right_text = compact_text(right)
-    if not left_text and not right_text:
-        return 1.0
-    if not left_text or not right_text:
-        return 0.0
-    score = SequenceMatcher(None, left_text, right_text).ratio()
-    if left_text in right_text or right_text in left_text:
-        score = max(score, 0.95)
-    return score
-
-
 def safe_json_load(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def doc_id_from_text(value: str) -> str:
-    match = DOC_ID_RE.search(value)
-    if not match:
-        raise ValueError(f"Cannot extract doc id from: {value}")
-    return match.group(1)
+def doc_id_from_path(value: str | Path) -> str:
+    doc_id = Path(value).stem
+    if not doc_id:
+        raise ValueError(f"Cannot resolve doc id from: {value}")
+    return doc_id
 
 
 def convert_bbox(
@@ -230,69 +219,6 @@ def normalize_bbox_to_unit(
     return values
 
 
-def parse_numbered_title_level(text: Any) -> int | None:
-    text = normalize_text(text)
-    if not text:
-        return None
-    if re.match(r"^第[一二三四五六七八九十百千万\d]+章\b", text):
-        return 1
-    if re.match(r"^第[一二三四五六七八九十百千万\d]+节\b", text):
-        return 2
-    if re.match(r"^第[一二三四五六七八九十百千万\d]+条\b", text):
-        return 3
-    match = re.match(r"^(\d+(?:\.\d+){0,7})\b", text)
-    if match:
-        return len(match.group(1).split("."))
-    lowered = text.lower()
-    if re.match(r"^(chapter|part)\b", lowered):
-        return 1
-    if re.match(r"^(section|appendix)\b", lowered):
-        return 2
-    return None
-
-
-def looks_like_title_text(text: Any) -> bool:
-    text = normalize_text(text)
-    if not text or len(text) > 120:
-        return False
-    if parse_numbered_title_level(text) is not None:
-        return True
-    if len(text) <= 50 and text.upper() == text and re.search(r"[A-Z\u4e00-\u9fff]", text):
-        return True
-    keywords = (
-        "abstract",
-        "summary",
-        "introduction",
-        "references",
-        "appendix",
-        "目录",
-        "摘要",
-        "引言",
-        "参考文献",
-        "附录",
-    )
-    lowered = text.lower()
-    return any(keyword in lowered for keyword in keywords)
-
-
-def infer_missing_title_levels(blocks: list[NormalizedBlock]) -> list[NormalizedBlock]:
-    title_blocks = [block for block in blocks if block.type == "title"]
-    heights = sorted({round(abs(block.bbox[3] - block.bbox[1]), 3) for block in title_blocks}, reverse=True)
-    height_rank = {height: rank + 1 for rank, height in enumerate(heights)}
-    for block in title_blocks:
-        if block.title_level is not None and block.title_level > 0:
-            continue
-        parsed = parse_numbered_title_level(block.content)
-        if parsed is not None:
-            block.title_level = parsed
-            continue
-        height = round(abs(block.bbox[3] - block.bbox[1]), 3)
-        rank = height_rank.get(height)
-        if rank is not None:
-            block.title_level = min(max(rank, 1), 8)
-    return blocks
-
-
 def sort_blocks(blocks: Iterable[NormalizedBlock]) -> list[NormalizedBlock]:
     return sorted(blocks, key=lambda block: (block.page, block.order, block.bbox[1], block.bbox[0]))
 
@@ -304,40 +230,6 @@ def reassign_block_ids(blocks: Iterable[NormalizedBlock], doc_id: str) -> list[N
         block.order = order
         reassigned.append(block)
     return reassigned
-
-
-def load_markdown_heading_pool(paths: Iterable[Path]) -> list[dict[str, Any]]:
-    pool: list[dict[str, Any]] = []
-    for path in paths:
-        if not path.exists():
-            continue
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            match = HEADING_RE.match(line.strip())
-            if match:
-                pool.append(
-                    {
-                        "level": len(match.group(1)),
-                        "text": normalize_text(match.group(2)),
-                        "used": False,
-                    }
-                )
-    return pool
-
-
-def consume_heading_level(pool: list[dict[str, Any]], text: str, min_score: float = 0.7) -> int | None:
-    best_index = None
-    best_score = 0.0
-    for index, item in enumerate(pool):
-        if item["used"]:
-            continue
-        score = text_similarity(text, item["text"])
-        if score > best_score:
-            best_index = index
-            best_score = score
-    if best_index is None or best_score < min_score:
-        return None
-    pool[best_index]["used"] = True
-    return int(pool[best_index]["level"])
 
 
 def optional_int_sort_key(item: dict[str, Any], key: str) -> tuple[int, int]:
@@ -399,41 +291,6 @@ def iter_model_pages(data: Any) -> Iterable[tuple[int, list[dict[str, Any]]]]:
             yield from iter_model_pages(pages)
 
 
-def lookup_content_level(content_items: list[dict[str, Any]], page: int, text: str, bbox: Iterable[float]) -> int | None:
-    best_level = None
-    best_score = 0.0
-    target_bbox = [float(value) for value in list(bbox)[:4]]
-    for item in content_items:
-        if item.get("text_level") is None:
-            continue
-        try:
-            item_page = int(item.get("page_idx", -1)) + 1
-        except (TypeError, ValueError):
-            continue
-        if item_page != int(page):
-            continue
-        score = text_similarity(text, item.get("text", ""))
-        item_bbox = item.get("bbox")
-        if item_bbox is not None:
-            score = 0.4 * score + 0.6 * bbox_overlap_smaller(target_bbox, [float(v) for v in item_bbox[:4]])
-        if score > best_score:
-            best_score = score
-            best_level = int(item["text_level"])
-    return best_level if best_score >= 0.5 else None
-
-
-def bbox_overlap_smaller(left_box: list[float], right_box: list[float]) -> float:
-    left = max(left_box[0], right_box[0])
-    top = max(left_box[1], right_box[1])
-    right = min(left_box[2], right_box[2])
-    bottom = min(left_box[3], right_box[3])
-    inter = max(0.0, right - left) * max(0.0, bottom - top)
-    left_area = max(0.0, left_box[2] - left_box[0]) * max(0.0, left_box[3] - left_box[1])
-    right_area = max(0.0, right_box[2] - right_box[0]) * max(0.0, right_box[3] - right_box[1])
-    denom = min(left_area, right_area)
-    return inter / denom if denom > 0 else 0.0
-
-
 class PaddleReader(BaseReader):
     model_name = "PaddleOCR-VL-1.5"
     render_scale = 2.0
@@ -451,7 +308,6 @@ class PaddleReader(BaseReader):
         return ReaderResult(self.model_name, doc_id, "missing", message=f"Missing {json_path} or per-page *_res.json")
 
     def _read_layout_parsing(self, doc_id: str, doc_root: Path, json_path: Path) -> ReaderResult:
-        heading_pool = load_markdown_heading_pool([doc_root / "layout_parsing.md"])
         data = safe_json_load(json_path)
         blocks: list[NormalizedBlock] = []
         order = 0
@@ -466,7 +322,6 @@ class PaddleReader(BaseReader):
                 content = normalize_text(item.get("block_content", ""))
                 if not content and canonical in {"text", "title", "caption"}:
                     continue
-                level = consume_heading_level(heading_pool, content) if canonical == "title" else None
                 blocks.append(
                     self.make_block(
                         doc_id,
@@ -476,7 +331,6 @@ class PaddleReader(BaseReader):
                         canonical,
                         content,
                         popo_type=popo_type,
-                        title_level=level,
                         source_label=str(item.get("block_label", "")),
                         page_width=page_width,
                         page_height=page_height,
@@ -497,7 +351,6 @@ class PaddleReader(BaseReader):
                 message=f"Cannot resolve source PDF page sizes for Paddle doc: {doc_id}",
             )
 
-        heading_pool = load_markdown_heading_pool(sorted(doc_root.glob("*.md")))
         blocks: list[NormalizedBlock] = []
         order = 0
         for path, data in zip(page_paths, page_payloads):
@@ -516,7 +369,6 @@ class PaddleReader(BaseReader):
                 content = normalize_text(item.get("block_content", ""))
                 if not content and canonical in {"text", "title", "caption"}:
                     continue
-                level = consume_heading_level(heading_pool, content) if canonical == "title" else None
                 blocks.append(
                     self.make_block(
                         doc_id,
@@ -526,7 +378,6 @@ class PaddleReader(BaseReader):
                         canonical,
                         content,
                         popo_type=popo_type,
-                        title_level=level,
                         source_label=str(item.get("block_label", "")),
                         meta={"source": "per_page_res_json", "file": path.name},
                     )
@@ -578,18 +429,16 @@ def map_paddle_label(label: str) -> tuple[str, str]:
     text_labels = {
         "text",
         "reference_content",
-        "header",
-        "footer",
         "abstract",
         "content",
-        "number",
-        "footnote",
-        "aside_text",
         "formula_number",
         "algorithm",
+        "vertical_text",
     }
     if label in {"paragraph_title", "doc_title"}:
         return "title", "title"
+    if label in SUPPLEMENT_LABEL_MAP:
+        return "text", SUPPLEMENT_LABEL_MAP[label]
     if label in {"image", "chart", "footer_image", "header_image", "seal"}:
         return "image", "image"
     if label == "table":
@@ -617,19 +466,18 @@ class MineruReader(BaseReader):
         if not model_path.exists() and not middle_path.exists() and not content_list_path.exists():
             return ReaderResult(self.model_name, doc_id, "missing", message=f"Missing {model_path}")
 
+        if model_path.exists():
+            return self._read_model(doc_id, model_path)
+        if middle_path.exists():
+            return self._read_middle(doc_id, middle_path)
         content_items = []
         if content_list_path.exists():
             loaded = safe_json_load(content_list_path)
             if isinstance(loaded, list):
                 content_items = loaded
-
-        if model_path.exists():
-            return self._read_model(doc_id, model_path, content_items)
-        if middle_path.exists():
-            return self._read_middle(doc_id, middle_path, content_items)
         return self._read_content_list(doc_id, content_items)
 
-    def _read_model(self, doc_id: str, model_path: Path, content_items: list[dict[str, Any]]) -> ReaderResult:
+    def _read_model(self, doc_id: str, model_path: Path) -> ReaderResult:
         data = safe_json_load(model_path)
         blocks: list[NormalizedBlock] = []
         order = 0
@@ -641,19 +489,15 @@ class MineruReader(BaseReader):
                 content = extract_block_content(item)
                 if not content and canonical in {"text", "title", "caption"}:
                     continue
-                level = None
-                if canonical == "title":
-                    level = lookup_content_level(content_items, page_index, content, item.get("bbox", [0, 0, 0, 0]))
                 blocks.append(
                     self.make_block(
                         doc_id,
                         order,
                         page_index,
-                        normalize_bbox_to_unit(item.get("bbox", [0, 0, 0, 0])),
+                        normalize_bbox_to_unit(item.get("bbox", [0, 0, 0, 0]), assumed_scale=1000),
                         canonical,
                         content,
                         popo_type=popo_type,
-                        title_level=level,
                         source_label=str(item.get("type", "")),
                         meta={"source": "model_json"},
                     )
@@ -661,7 +505,7 @@ class MineruReader(BaseReader):
                 order += 1
         return finalize_reader_result(self.model_name, doc_id, blocks)
 
-    def _read_middle(self, doc_id: str, middle_path: Path, content_items: list[dict[str, Any]]) -> ReaderResult:
+    def _read_middle(self, doc_id: str, middle_path: Path) -> ReaderResult:
         data = safe_json_load(middle_path)
         blocks: list[NormalizedBlock] = []
         order = 0
@@ -677,9 +521,6 @@ class MineruReader(BaseReader):
                 content = extract_block_content(item)
                 if not content and canonical in {"text", "title", "caption"}:
                     continue
-                level = None
-                if canonical == "title":
-                    level = lookup_content_level(content_items, page_index, content, item.get("bbox", [0, 0, 0, 0]))
                 blocks.append(
                     self.make_block(
                         doc_id,
@@ -689,7 +530,6 @@ class MineruReader(BaseReader):
                         canonical,
                         content,
                         popo_type=popo_type,
-                        title_level=level,
                         source_label=str(item.get("type", "")),
                         page_width=page_width,
                         page_height=page_height,
@@ -739,21 +579,17 @@ class MonkeyOCRReader(MineruReader):
     def read_doc(self, doc_id: str) -> ReaderResult:
         doc_root = self.model_root / doc_id
         middle_path = doc_root / f"{doc_id}_middle.json"
-        content_list_path = doc_root / f"{doc_id}_content_list.json"
         if not middle_path.exists():
             return ReaderResult(self.model_name, doc_id, "missing", message=f"Missing {middle_path}")
 
-        content_items = []
-        if content_list_path.exists():
-            loaded = safe_json_load(content_list_path)
-            if isinstance(loaded, list):
-                content_items = loaded
-        return self._read_middle(doc_id, middle_path, content_items)
+        return self._read_middle(doc_id, middle_path)
 
 
 def map_mineru_label(label: str) -> tuple[str, str]:
     if label == "title":
         return "title", "title"
+    if label in SUPPLEMENT_LABEL_MAP:
+        return "text", SUPPLEMENT_LABEL_MAP[label]
     if label == "image":
         return "image", "image"
     if label == "table":
@@ -779,13 +615,6 @@ class DolphinReader(BaseReader):
 
         data = safe_json_load(json_path)
         page_sizes = self._load_page_sizes(data.get("source_file"), doc_id)
-        if not page_sizes:
-            return ReaderResult(
-                self.model_name,
-                doc_id,
-                "missing",
-                message=f"Cannot resolve source PDF page sizes for Dolphin doc: {doc_id}",
-            )
         blocks: list[NormalizedBlock] = []
         order = 0
         for fallback_page_index, page in enumerate(data.get("pages", []), start=1):
@@ -844,15 +673,17 @@ def map_dolphin_label(item: dict[str, Any]) -> tuple[str, str, int | None]:
         return "title", "title", level
     if label == "catalogue":
         return "title", "title", 1
+    if label == "header":
+        return "text", "header", None
+    if label == "foot":
+        return "text", "footer", None
+    if label == "fnote":
+        return "text", "page_footnote", None
     if label == "fig":
         return "image", "image", None
     if label == "tab":
         return "table", "table", None
     if label == "cap":
-        text = normalize_text(item.get("text", ""))
-        lowered = text.lower()
-        if lowered.startswith("table") or lowered.startswith("tab.") or text.startswith("表"):
-            return "caption", "table_caption", None
         return "caption", "image_caption", None
     if label == "list":
         return "text", "list_item", None
@@ -906,7 +737,6 @@ class GlmOCRReader(BaseReader):
                         canonical,
                         content,
                         popo_type=popo_type,
-                        title_level=parse_numbered_title_level(content) if canonical == "title" else None,
                         source_label=str(item.get("label", "")),
                         meta={"source": "model_json"},
                     )
@@ -931,21 +761,15 @@ class GlmOCRReader(BaseReader):
                     float(location.get("left", 0)) + float(location.get("width", 0)),
                     float(location.get("top", 0)) + float(location.get("height", 0)),
                 ]
-                if max(abs(value) for value in bbox) > 1.5 and (not page_width or not page_height):
-                    raise ValueError(
-                        f"Cannot normalize GLM fallback bbox without page size: doc={doc_id} page={page_index}"
-                    )
-                canonical = "title" if looks_like_title_text(content) else "text"
                 blocks.append(
                     self.make_block(
                         doc_id,
                         order,
                         page_index,
                         normalize_bbox_to_unit(bbox, page_width, page_height),
-                        canonical,
+                        "text",
                         content,
-                        popo_type="title" if canonical == "title" else "text",
-                        title_level=parse_numbered_title_level(content) if canonical == "title" else None,
+                        popo_type="text",
                         source_label="words_result",
                     )
                 )
@@ -988,13 +812,13 @@ def map_glm_label(label: str) -> tuple[str, str]:
         return "caption", "image_caption"
     if label == "vision_footnote":
         return "caption", "image_footnote"
-    if label in {"display_formula", "inline_formula"}:
+    if label in {"display_formula", "inline_formula", "formula"}:
         return "text", "equation"
     return "text", "text"
 
 
 def finalize_reader_result(model_name: str, doc_id: str, blocks: list[NormalizedBlock]) -> ReaderResult:
-    blocks = infer_missing_title_levels(reassign_block_ids(blocks, doc_id))
+    blocks = reassign_block_ids(blocks, doc_id)
     return ReaderResult(model_name=model_name, doc_id=doc_id, status="ok", blocks=blocks)
 
 
@@ -1025,7 +849,7 @@ def resolve_doc_ids(args: argparse.Namespace) -> list[str]:
         data = safe_json_load(args.dataset_json)
         for item in data:
             if isinstance(item, dict) and item.get("image"):
-                doc_ids.append(doc_id_from_text(str(item["image"])))
+                doc_ids.append(doc_id_from_path(item["image"]))
     if not doc_ids:
         doc_ids.extend(infer_doc_ids_from_input_dir(args.input_dir))
     unique_doc_ids = sorted(dict.fromkeys(doc_ids))
@@ -1040,10 +864,7 @@ def infer_doc_ids_from_input_dir(input_dir: str | Path) -> list[str]:
         raise FileNotFoundError(f"Input directory does not exist: {root}")
     doc_ids: list[str] = []
     for path in sorted(root.iterdir()):
-        try:
-            doc_ids.append(doc_id_from_text(path.name))
-        except ValueError:
-            continue
+        doc_ids.append(doc_id_from_path(path))
     return sorted(dict.fromkeys(doc_ids))
 
 

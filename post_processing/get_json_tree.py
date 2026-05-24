@@ -8,6 +8,17 @@ special_types = ['table_footnote', 'table', 'chart', 'table_caption', 'image_foo
 large_block_types = ['super', 'list', 'ref_block', 'equation_block', 'image_block']
 supplement_types = ['page_title', 'page_number', 'page_footnote', 'header', 'aside_text', 'footer']
 
+supplement_source_label_map = {
+    'page_title': 'page_title',
+    'page_number': 'page_number',
+    'page_footnote': 'page_footnote',
+    'header': 'header',
+    'aside_text': 'aside_text',
+    'footer': 'footer',
+    'number': 'page_number',
+    'footnote': 'page_footnote',
+}
+
 def cp_init(cp_type="",title="",metadata="",content="",level=-1,location=None,block_ids=None):
     # Create a component
     cp = {
@@ -25,6 +36,10 @@ def cp_init(cp_type="",title="",metadata="",content="",level=-1,location=None,bl
 def construct_json_tree(input_file, output_dir, txt_dir):
     with open(input_file, 'r', encoding='utf-8') as f:
         elements = json.load(f)
+    for element in elements:
+        source_label = element.get('source_label')
+        if element.get('type') == 'text' and source_label in supplement_source_label_map:
+            element['type'] = supplement_source_label_map[source_label]
     elements = merge_cross_page_tables(elements)
     
     def get_text_components(elements):

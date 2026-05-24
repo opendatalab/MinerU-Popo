@@ -5,11 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 MODEL="mineru"
-INPUT_DIR="${INPUT_DIR:-${REPO_ROOT}/post-process/${MODEL}}"
+INPUT_DIR="${REPO_ROOT}/post-process/${MODEL}"
 OUTPUT_DIR="${REPO_ROOT}/outputs/label_normalization"
-PDF_DIR="${PDF_DIR:-eval_pdf_dir}"
-BBOX_SCALE="source"
-DOC_LIMIT="5"
+PDF_DIR="${REPO_ROOT}/eval_pdf_dir"
+DOC_LIMIT="10"
 
 mkdir -p "${OUTPUT_DIR}"
 
@@ -18,5 +17,4 @@ python3 "${REPO_ROOT}/post_processing/label_normalization.py" \
   --input-dir "${INPUT_DIR}" \
   --output-dir "${OUTPUT_DIR}" \
   --pdf-dir "${PDF_DIR}" \
-  --bbox-scale "${BBOX_SCALE}" \
   --doc-limit "${DOC_LIMIT}"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 import json
 from pathlib import Path
 import re
@@ -21,16 +22,12 @@ if str(REPO_ROOT) not in sys.path:
 from post_processing.label_normalization import (  # noqa: E402
     NormalizedBlock,
     build_reader_from_input_dir,
-    compact_text,
-    doc_id_from_text,
     normalize_text,
-    text_similarity,
     title_blocks,
 )
 
 
 TITLE_PREFIX = "<image>\nTitle Level Analysis: "
-TITLE_TEDS_MODES = {"id_aware", "structure_only", "content_aware"}
 TITLE_TEDS_MODE = "content_aware"
 DEFAULT_GT_JSON_CANDIDATES = [
     Path("eval_gt_dir/title.json"),
@@ -52,6 +49,31 @@ def normalize_prediction(pred: Any) -> str:
     if pred is None:
         return ""
     return pred if isinstance(pred, str) else str(pred)
+
+
+def compact_text(text: Any) -> str:
+    text = normalize_text(text)
+    return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", text).lower()
+
+
+def text_similarity(left: Any, right: Any) -> float:
+    left_text = compact_text(left)
+    right_text = compact_text(right)
+    if not left_text and not right_text:
+        return 1.0
+    if not left_text or not right_text:
+        return 0.0
+    score = SequenceMatcher(None, left_text, right_text).ratio()
+    if left_text in right_text or right_text in left_text:
+        score = max(score, 0.9)
+    return score
+
+
+def doc_id_from_path(value: str | Path) -> str:
+    doc_id = Path(value).stem
+    if not doc_id:
+        raise ValueError(f"Cannot resolve doc id from: {value}")
+    return doc_id
 
 
 def parse_title_prompt(prompt: str) -> list[GTTitleBlock]:
@@ -270,7 +292,7 @@ def evaluate_one_item(
     mode: str,
     min_match_score: float,
 ) -> dict[str, Any]:
-    doc_id = doc_id_from_text(str(item.get("image", "")))
+    doc_id = doc_id_from_path(str(item.get("image", "")))
     gt_blocks = parse_title_prompt(item["conversations"][0]["value"])
     gt_block_by_id = {block.block_id: block for block in gt_blocks}
     gt_nodes_raw = parse_title_labels(item["conversations"][1]["value"])

@@ -15,16 +15,14 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 #
 # Usage:
 #   bash scripts/build_tree.sh
-#   MODELS="mineru,dolphin" bash scripts/build_tree.sh
-#   CLEAN=1 bash scripts/build_tree.sh
 
-PYTHON_TREE_BIN="${PYTHON_TREE_BIN:-python3}"
-INFERENCE_OUTPUT_ROOT="${INFERENCE_OUTPUT_ROOT:-${REPO_ROOT}/outputs/inference}"
-TREE_OUTPUT_ROOT="${TREE_OUTPUT_ROOT:-${REPO_ROOT}/outputs/build_tree}"
-TREE_TXT_OUTPUT_ROOT="${TREE_TXT_OUTPUT_ROOT:-${REPO_ROOT}/outputs/build_tree_txt}"
-MODELS="${MODELS:-}"
-CLEAN="${CLEAN:-0}"
-FAIL_ON_MISSING="${FAIL_ON_MISSING:-1}"
+PYTHON_TREE_BIN="python3"
+INFERENCE_OUTPUT_ROOT="${REPO_ROOT}/outputs/inference"
+TREE_OUTPUT_ROOT="${REPO_ROOT}/outputs/build_tree"
+TREE_TXT_OUTPUT_ROOT="${REPO_ROOT}/outputs/build_tree_txt"
+MODELS="mineru"
+CLEAN="0"
+FAIL_ON_MISSING="1"
 
 safe_model_name() {
   local model="$1"
