@@ -1,6 +1,7 @@
 # MinerU-Popo: Universal Post-Processing Model for Structured Document Parsing
 
 <p align="center">
+  <a href="http://arxiv.org/abs/2605.24973"><img src="https://img.shields.io/badge/arXiv-2605.12882-b31b1b?style=flat-square&logo=arxiv" alt="arXiv" /></a>
   <a href="https://huggingface.co/DreamEternal/MinerU-Popo"><img src="https://img.shields.io/badge/%F0%9F%A4%97_Dataset-HuggingFace-yellow?style=flat-square" alt="Hugging Face dataset" /></a>
   <a href="./LICENSE.txt"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License MIT" /></a>
 </p>
