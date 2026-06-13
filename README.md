@@ -56,14 +56,20 @@ It constructs document tree structures with a 4B post-processing model that perf
 
 ## ⚙️ Setup
 
-1. Prepare Environment
+### Prepare Environment
+#### Install from Source
 ```bash
 conda create -n popo python=3.10
 conda activate popo
 pip install -r requirements.txt
 ```
 
-2. Download Model
+#### Install from Docker Image
+```bash
+ docker run -it --rm --gpus=all --ipc=host --network=host dockerrr8277/mineru-popo-vllm:latest
+```
+
+### Download Model
 
 Download the MinerU-Popo post-processing model:
 
@@ -73,7 +79,7 @@ hf download DreamEternal/MinerU-Popo --local-dir models/Mineru-Popo
 
 - [MinerU-Popo](https://huggingface.co/DreamEternal/MinerU-Popo)
 
-1. Model Configuration
+### Model Configuration
 
 In the [Configuration](./post_processing/model_utils.py),
 for transformer inference, edit the environment `POPO_MODEL_PATH`. For vllm inference, edit the `url` and `key` in function `popo_generate`.
