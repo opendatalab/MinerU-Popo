@@ -249,35 +249,75 @@ def merge_table_html(previous_html, current_html, cell_list):
 
 def merge_cross_page_tables(elements):
     id_to_index = {element["id"]: idx for idx, element in enumerate(elements) if "id" in element}
+    table_ids = [element["id"] for element in elements if element.get("type") == "table" and "id" in element]
+    table_links = {table_id: set() for table_id in table_ids}
+
+    for table_id in table_ids:
+        table = elements[id_to_index[table_id]]
+        partner_id = table.get("table_merge", -1)
+        if partner_id == table_id or partner_id not in table_links:
+            continue
+        table_links[table_id].add(partner_id)
+        table_links[partner_id].add(table_id)
+
+    visited = set()
     merged_partner_ids = set()
-
-    for idx, element in enumerate(elements):
-        if element.get("type") != "table":
-            continue
-        partner_id = element.get("table_merge", -1)
-        cell_list = element.get("cell_list", [])
-        if partner_id < 0 or partner_id in merged_partner_ids:
-            continue
-        partner_index = id_to_index.get(partner_id)
-        if partner_index is None or partner_index <= idx:
+    redirected_ids = {}
+    for table_id in table_ids:
+        if table_id in visited or not table_links[table_id]:
             continue
 
-        partner = elements[partner_index]
-        if partner.get("type") != "table":
-            continue
+        component = []
+        stack = [table_id]
+        visited.add(table_id)
+        while stack:
+            current_id = stack.pop()
+            component.append(current_id)
+            for neighbor_id in table_links[current_id] - visited:
+                visited.add(neighbor_id)
+                stack.append(neighbor_id)
 
-        merged_html = merge_table_html(element.get("content", ""), partner.get("content", ""), cell_list)
-        element["content"] = merged_html
-        element["merged_locations"] = [
-            {"bbox": element["bbox"], "page": element["page"]},
-            {"bbox": partner["bbox"], "page": partner["page"]},
+        component.sort(key=id_to_index.get)
+        base_id = component[0]
+        base = elements[id_to_index[base_id]]
+        previous = base
+
+        for current_id in component[1:]:
+            current = elements[id_to_index[current_id]]
+            cell_list = previous.get("cell_list", []) or current.get("cell_list", [])
+            base["content"] = merge_table_html(
+                base.get("content", ""),
+                current.get("content", ""),
+                cell_list,
+            )
+            previous = current
+
+        base["merged_block_ids"] = list(component)
+        base["merged_locations"] = [
+            {
+                "bbox": elements[id_to_index[block_id]]["bbox"],
+                "page": elements[id_to_index[block_id]]["page"],
+            }
+            for block_id in component
         ]
-        element["merged_block_ids"] = [element["id"], partner["id"]]
 
-        for other in elements:
-            if other.get("image") == partner["id"]:
-                other["image"] = element["id"]
+        merged_partner_ids.update(component[1:])
+        redirected_ids.update({continuation_id: base_id for continuation_id in component[1:]})
 
-        merged_partner_ids.add(partner_id)
+    for element in elements:
+        anchor_id = element.get("image")
+        if anchor_id in redirected_ids:
+            element["image"] = redirected_ids[anchor_id]
+
+    for table_id in table_ids:
+        if table_id in merged_partner_ids:
+            continue
+        table = elements[id_to_index[table_id]]
+        anchor_id = table.get("image", -1)
+        anchor_index = id_to_index.get(anchor_id)
+        if anchor_id == table_id:
+            table["image"] = -1
+        elif anchor_index is not None and elements[anchor_index].get("type") in {"table_caption", "table_footnote"}:
+            table["image"] = -1
 
     return [element for element in elements if element.get("id") not in merged_partner_ids]
