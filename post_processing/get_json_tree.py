@@ -19,7 +19,7 @@ supplement_source_label_map = {
     'footnote': 'page_footnote',
 }
 
-def cp_init(cp_type="",title="",metadata="",content="",level=-1,location=None,block_ids=None):
+def cp_init(cp_type="",title="",metadata="",content="",level=-1,location=None,block_ids=None,img_path="",caption=""):
     # Create a component
     cp = {
         'type': cp_type,
@@ -28,7 +28,9 @@ def cp_init(cp_type="",title="",metadata="",content="",level=-1,location=None,bl
         'content': content,
         'level': level,
         'location': [] if not location else location,
-        'block_ids': [] if not block_ids else block_ids
+        'block_ids': [] if not block_ids else block_ids,
+        'img_path': img_path,
+        'caption': caption,
     }
     return cp
 
@@ -102,7 +104,7 @@ def construct_json_tree(input_file, output_dir, txt_dir):
             if element['type'] in ['table', 'chart', 'image', 'seal', 'image_block']:
                 locations = element.get('merged_locations', [{'bbox':element['bbox'], 'page':element['page']}])
                 block_ids = element.get('merged_block_ids', [element['id']])
-                visual_component = cp_init(cp_type=element['type'], content = element['content'], level = element['image'], location = locations, block_ids = block_ids)
+                visual_component = cp_init(cp_type=element['type'], content = element['content'], level = element['image'], location = locations, block_ids = block_ids, img_path = element.get('img_path', ''), caption = element.get('caption', ''))
                 
                 for elem in elements:
                     if elem['image'] == element['id']:
