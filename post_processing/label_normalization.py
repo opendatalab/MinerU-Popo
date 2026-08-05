@@ -53,6 +53,8 @@ class NormalizedBlock:
     popo_type: str
     title_level: int | None = None
     source_label: str | None = None
+    img_path: str = ""  # MinerU content_list uses "img_path", middle.json uses "image_path"; we emit "img_path" on output to match content_list.json
+    caption: str = ""  # caption text for image/table blocks
     meta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,6 +72,10 @@ class NormalizedBlock:
         if self.source_label is not None:
             block["source_label"] = self.source_label
         block["source_id"] = self.block_id
+        if self.img_path:
+            block["img_path"] = self.img_path
+        if self.caption:
+            block["caption"] = self.caption
         return block
 
 
@@ -112,6 +118,8 @@ class BaseReader:
         popo_type: str | None = None,
         title_level: int | None = None,
         source_label: str | None = None,
+        img_path: str = "",
+        caption: str = "",
         page_width: float | int | None = None,
         page_height: float | int | None = None,
         meta: dict[str, Any] | None = None,
@@ -128,6 +136,8 @@ class BaseReader:
             popo_type=popo_type or canonical_type,
             title_level=title_level,
             source_label=source_label,
+            img_path=img_path,
+            caption=caption,
             meta=meta or {},
         )
 
@@ -136,6 +146,15 @@ def normalize_text(text: Any) -> str:
     text = "" if text is None else str(text)
     text = text.replace("\u3000", " ").replace("\n", " ")
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _join_str_list(value: Any) -> str:
+    """Join a list field (image_caption / table_caption / etc.) into a string."""
+    if not value:
+        return ""
+    if isinstance(value, list):
+        return " ".join(str(v) for v in value if v)
+    return str(value)
 
 
 def safe_json_load(path: str | Path) -> Any:
@@ -505,6 +524,33 @@ class MineruReader(BaseReader):
                 order += 1
         return finalize_reader_result(self.model_name, doc_id, blocks)
 
+    def _extract_image_path(self, item: dict[str, Any]) -> str:
+        """Pull image_path from para_block.blocks[*].lines[*].spans[*].image_path.
+
+        Note: middle.json uses "image_path" (full word); content_list.json and
+        our output use "img_path" (abbreviated). MinerU naming inconsistency.
+        """
+        for sub_block in item.get("blocks") or []:
+            for line in sub_block.get("lines") or []:
+                for span in line.get("spans") or []:
+                    if path := span.get("image_path"):
+                        return str(path)
+        return ""
+
+    def _extract_caption(self, item: dict[str, Any], sub_type: str) -> str:
+        """Pull caption text from sub_blocks of the given type (e.g. 'table_caption').
+        Text is in lines[*].spans[*].content; multiple matches joined with space.
+        """
+        texts: list[str] = []
+        for sub_block in item.get("blocks") or []:
+            if sub_block.get("type") != sub_type:
+                continue
+            for line in sub_block.get("lines") or []:
+                for span in line.get("spans") or []:
+                    if content := span.get("content"):
+                        texts.append(str(content))
+        return " ".join(texts)
+
     def _read_middle(self, doc_id: str, middle_path: Path) -> ReaderResult:
         data = safe_json_load(middle_path)
         blocks: list[NormalizedBlock] = []
@@ -521,6 +567,12 @@ class MineruReader(BaseReader):
                 content = extract_block_content(item)
                 if not content and canonical in {"text", "title", "caption"}:
                     continue
+                # Extract image_path + caption from middle.json's nested sub_blocks.
+                img_path = self._extract_image_path(item)
+                caption = ""
+                if canonical in ("image", "table"):
+                    caption = self._extract_caption(item, f"{canonical}_caption")
+
                 blocks.append(
                     self.make_block(
                         doc_id,
@@ -531,6 +583,8 @@ class MineruReader(BaseReader):
                         content,
                         popo_type=popo_type,
                         source_label=str(item.get("type", "")),
+                        img_path=img_path,
+                        caption=caption,
                         page_width=page_width,
                         page_height=page_height,
                     )
@@ -565,6 +619,9 @@ class MineruReader(BaseReader):
                     popo_type=popo_type,
                     title_level=level,
                     source_label=str(item.get("type", "")),
+                    # content_list.json uses "img_path" (middle.json uses "image_path")
+                    img_path=str(item.get("img_path", "")),
+                    caption=_join_str_list(item.get("image_caption") or item.get("table_caption")),
                     meta={"source": "content_list"},
                 )
             )
