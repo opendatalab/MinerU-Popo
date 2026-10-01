@@ -86,6 +86,20 @@ for transformer inference, edit the environment `POPO_MODEL_PATH`. For vllm infe
 
 For enrichment and question answering, further edit the `url` and `key` in `qwen_generate` and `gpt_generate`.
 
+### FP8 Online Quantization (Optional)
+
+vLLM can serve MinerU-Popo with online FP8 weight quantization by adding `--quantization fp8` to the serve command: weights are cast at load time, so no offline calibration, extra checkpoints, or code changes are required.
+
+Measured on a single NVIDIA GB10 (Grace Blackwell), constant background load, official `output_cases` samples, greedy decoding:
+
+| | bf16 (default) | fp8 (`--quantization fp8`) |
+|---|---|---|
+| GPU weight memory | 8.3 GiB | 5.0 GiB |
+| Decode speed | 8.4 tok/s | 18.3 tok/s (2.17x) |
+| Output vs bf16 baseline | — | byte-identical on 2/3 samples; 830/831 tokens on the third (one borderline title-level flip) |
+
+Reproduce the equivalence check with [eval/quant_equivalence_check.py](./eval/quant_equivalence_check.py), which compares greedy completions of two engines on deterministic prompts built from `output_cases/trees`. The speedup comes from the FP8 kernels available on recent NVIDIA GPUs; validate output equivalence on your own document distribution before routing production traffic through FP8.
+
 ## 💻 Usage
 
 The post-processing pipeline takes page-level parsing results from OCR/layout systems, normalizes them into a unified schema, runs MinerU-Popo inference, and finally builds document trees.

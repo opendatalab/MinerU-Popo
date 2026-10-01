@@ -86,6 +86,20 @@ hf download DreamEternal/MinerU-Popo --local-dir models/MinerU-Popo
 
 对于文档内容丰富化和问答，请进一步编辑函数 `qwen_generate` 和 `gpt_generate` 中的变量 `url` 和 `key`。
 
+### FP8 在线量化（可选）
+
+在 vLLM 启动命令中追加 `--quantization fp8` 即可启用在线 FP8 权重量化：权重在加载时现场转换，无需离线校准、额外的量化权重仓库或任何代码改动。
+
+在单张 NVIDIA GB10（Grace Blackwell）上的实测（恒定背景负载，官方 `output_cases` 样例，贪心解码）：
+
+| | bf16（默认） | fp8（`--quantization fp8`） |
+|---|---|---|
+| GPU 权重占用 | 8.3 GiB | 5.0 GiB |
+| 解码速度 | 8.4 tok/s | 18.3 tok/s（2.17 倍） |
+| 相对 bf16 的输出 | — | 3 个样例中 2 个逐字节一致；第 3 个 831 个 token 仅 1 处边界层级翻转 |
+
+可用 [eval/quant_equivalence_check.py](./eval/quant_equivalence_check.py) 复现该等价性校验：它基于 `output_cases/trees` 构造确定性 prompt，对两个引擎的贪心输出做逐字节对比。速度收益来自较新 NVIDIA GPU 上的 FP8 kernel；在生产启用前，请先在自己的文档分布上验证输出等价性。
+
 ## 💻 使用
 
 后处理流程会读取页面级 OCR/Layout 解析结果，将不同模型的输出归一化为统一格式，运行 MinerU-Popo 推理，并最终构建文档树。
